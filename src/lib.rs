@@ -1,6 +1,7 @@
 #![warn(clippy::all)]
 
 use std::{
+    sync::mpsc::{channel, Sender, Receiver},
     default::Default,
     io::{BufReader, Read, Write},
     num::Wrapping,
@@ -62,6 +63,7 @@ pub struct State {
     pub pointer: Wrapping<usize>,
     pub temp: Vec<Command>,
     pub loop_nesting: u8,
+    pub channel: (Sender<()>, Receiver<()>),
 }
 
 impl Default for State {
@@ -71,6 +73,7 @@ impl Default for State {
             pointer: Wrapping(0),
             temp: Vec::new(),
             loop_nesting: 0,
+            channel: channel(),
         }
     }
 }
@@ -89,6 +92,9 @@ impl State {
     pub fn pointer_sub(&mut self) {
         self.pointer -= Wrapping(1);
         self.pointer %= Wrapping(self.cells.len());
+    }
+    pub fn get_stop_sender(&self) -> Sender<()> {
+        self.channel.0.clone()
     }
 }
 
@@ -114,6 +120,9 @@ where
     W: Write,
 {
     for cmd in src.chars_iterator().map(|c| c.map(Command::from_char)) {
+        if let Ok(()) = state.channel.1.try_recv() {
+            return Err(Error::Exit);
+        }
         match cmd {
             Ok(cmd) => {
                 if let Some(cmd) = cmd {
@@ -139,6 +148,9 @@ fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOu
                 let cmds = replace(&mut state.temp, Vec::new());
                 let mut cur = state.get_cur();
                 while cur != Wrapping(0) {
+                    if let Ok(()) = state.channel.1.try_recv() {
+                        return Err(Error::Exit);
+                    }
                     for cmd in &cmds {
                         run_command(state, cmd.clone(), io)?;
                     }

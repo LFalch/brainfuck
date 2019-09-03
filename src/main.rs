@@ -72,9 +72,8 @@ fn main() {
 fn handle_error(e: Error) {
     match e {
         IoError(e) => panic!("Unexpected error:\n{:?}", e),
-        CharsError(e) => panic!("Unexpected error:\n{:?}", e),
-        Exit => (),
+        Stopped => (),
         OutOfBounds => eprintln!("Error, out of bounds"),
-        NoBlockStarted => eprintln!("Error, cannot end a block when none has been started"),
+        NoLoopStarted => eprintln!("Error, cannot end a loop when none has been started"),
     }
 }

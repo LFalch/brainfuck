@@ -7,15 +7,13 @@ use std::{
     num::Wrapping,
 };
 
-mod chars;
 mod err;
-use crate::chars::*;
 pub use crate::err::{Error, Result};
 
 #[derive(Clone, PartialEq)]
 pub enum Command {
-    PointerIncr,
-    PointerDecr,
+    PtrIncr,
+    PtrDecr,
     Incr,
     Decr,
     Out,
@@ -29,8 +27,8 @@ impl Debug for Command {
         write!(f, "{}", match self {
             Incr => "+",
             Decr => "-",
-            PointerIncr => ">",
-            PointerDecr => "<",
+            PtrIncr => ">",
+            PtrDecr => "<",
             Out => ".",
             In => ",",
             LoopBegin => "[",
@@ -43,16 +41,16 @@ use std::fmt::{self, Debug};
 use self::Command::*;
 
 impl Command {
-    pub fn from_char(cmd: char) -> Option<Self> {
+    pub fn from_byte(cmd: u8) -> Option<Self> {
         Some(match cmd {
-            '+' => Incr,
-            '-' => Decr,
-            '>' => PointerIncr,
-            '<' => PointerDecr,
-            '.' => Out,
-            ',' => In,
-            '[' => LoopBegin,
-            ']' => LoopEnd,
+            b'+' => Incr,
+            b'-' => Decr,
+            b'>' => PtrIncr,
+            b'<' => PtrDecr,
+            b'.' => Out,
+            b',' => In,
+            b'[' => LoopBegin,
+            b']' => LoopEnd,
             _ => return None
         })
     }
@@ -119,9 +117,9 @@ where
     R2: Read,
     W: Write,
 {
-    for cmd in src.chars_iterator().map(|c| c.map(Command::from_char)) {
+    for cmd in src.bytes().map(|b| b.map(Command::from_byte)) {
         if let Ok(()) = state.channel.1.try_recv() {
-            return Err(Error::Exit);
+            return Err(Error::Stopped);
         }
         match cmd {
             Ok(cmd) => {
@@ -129,7 +127,7 @@ where
                     run_command(state, cmd, io)?;
                 }
             }
-            Err(e) => return Err(Error::CharsError(e)),
+            Err(e) => return Err(Error::IoError(e)),
         }
     }
 
@@ -141,7 +139,7 @@ use std::mem::replace;
 fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOuter<W, R>) -> Result<()> {
     match cmd {
         LoopEnd => match state.loop_nesting {
-            0 => return Err(Error::NoBlockStarted),
+            0 => return Err(Error::NoLoopStarted),
             1 => {
                 state.loop_nesting = 0;
 
@@ -149,7 +147,7 @@ fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOu
                 let mut cur = state.get_cur();
                 while cur != Wrapping(0) {
                     if let Ok(()) = state.channel.1.try_recv() {
-                        return Err(Error::Exit);
+                        return Err(Error::Stopped);
                     }
                     for cmd in &cmds {
                         run_command(state, cmd.clone(), io)?;
@@ -169,8 +167,8 @@ fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOu
             }
         }
         ref cmd if state.loop_nesting > 0 => state.temp.push(cmd.clone()),
-        PointerIncr => state.pointer_add(),
-        PointerDecr => state.pointer_sub(),
+        PtrIncr => state.pointer_add(),
+        PtrDecr => state.pointer_sub(),
         Incr => *state.get_mut_cur() += Wrapping(1),
         Decr => *state.get_mut_cur() -= Wrapping(1),
         Out => io.o.write_all(&[state.get_cur().0])?,

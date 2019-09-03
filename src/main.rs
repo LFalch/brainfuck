@@ -7,7 +7,7 @@ use std::io::{stdin, stdout, Write};
 use brainfuck::Error::*;
 use brainfuck::*;
 
-fn main() {
+fn run() -> Result<()> {
     let matches = App::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .author(env!("CARGO_PKG_AUTHORS"))
@@ -36,21 +36,18 @@ fn main() {
                 println!();
                 break;
             }
-            match run_with_state(s.as_bytes(), &mut state, &mut stdouter) {
-                Ok(()) => (),
-                Err(e) => handle_error(e),
-            }
+            run_with_state(s.as_bytes(), &mut state, &mut stdouter)?;
 
-            let n = (state.cells.len() - state.cells.iter().rev().take_while(|x| x.0 == 0).count()).max(state.pointer.0+1);
+            let n = (state.cells.len() - state.cells.iter().rev().take_while(|x| x.0 == 0).count()).max(state.cell_pointer.0+1);
 
-            if state.pointer.0 == 0 {
+            if state.cell_pointer.0 == 0 {
                 print!("[")
             }
             for (i, byte) in state.cells.iter().take(n).map(|w| w.0).enumerate() {
                 print!("{:02x}", byte);
-                if i == state.pointer.0 {
+                if i == state.cell_pointer.0 {
                     print!("]");
-                } else if i+1 == state.pointer.0 {
+                } else if i+1 == state.cell_pointer.0 {
                     print!("[");
                 } else {
                     print!(" ");
@@ -62,18 +59,18 @@ fn main() {
         let src = matches.value_of("SOURCE").unwrap();
 
         let file = File::open(src).unwrap();
-        match run_with_state(file, &mut state, &mut stdouter) {
-            Ok(()) => (),
-            Err(e) => handle_error(e),
-        }
+        run_with_state(file, &mut state, &mut stdouter)?;
     }
+    state.evaluate().map(std::mem::drop)
 }
 
-fn handle_error(e: Error) {
-    match e {
-        IoError(e) => panic!("Unexpected error:\n{:?}", e),
-        Stopped => (),
-        OutOfBounds => eprintln!("Error, out of bounds"),
-        NoLoopStarted => eprintln!("Error, cannot end a loop when none has been started"),
+fn main() {
+    match run() {
+        Ok(()) => (), 
+        Err(IoError(e)) => panic!("Unexpected error:\n{:?}", e),
+        Err(Stopped) => (),
+        Err(OutOfBounds) => eprintln!("Error, out of bounds"),
+        Err(NoLoopStarted) => eprintln!("Error, cannot end a loop when none has been started"),
+        Err(UnendedLoop) => eprintln!("Error, ended with unended loops"),
     }
 }

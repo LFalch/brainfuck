@@ -9,6 +9,7 @@ pub enum Error {
     Stopped,
     OutOfBounds,
     NoLoopStarted,
+    UnendedLoop,
     IoError(IoError),
 }
 

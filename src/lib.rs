@@ -10,7 +10,8 @@ use std::{
 mod err;
 pub use crate::err::{Error, Result};
 
-#[derive(Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Command {
     PtrIncr,
     PtrDecr,
@@ -56,11 +57,13 @@ impl Command {
     }
 }
 
+pub type Cells = [Wrapping<u8>; 256];
+
 pub struct State {
-    pub cells: [Wrapping<u8>; 256],
-    pub pointer: Wrapping<usize>,
-    pub temp: Vec<Command>,
-    pub loop_nesting: u8,
+    pub cells: Cells,
+    pub cell_pointer: Wrapping<usize>,
+    pub ongoing_loops: Vec<Command>,
+    pub loop_nesting: u16,
     pub channel: (Sender<()>, Receiver<()>),
 }
 
@@ -68,8 +71,8 @@ impl Default for State {
     fn default() -> Self {
         State {
             cells: [Wrapping(0); 256],
-            pointer: Wrapping(0),
-            temp: Vec::new(),
+            cell_pointer: Wrapping(0),
+            ongoing_loops: Vec::new(),
             loop_nesting: 0,
             channel: channel(),
         }
@@ -78,21 +81,29 @@ impl Default for State {
 
 impl State {
     pub fn get_cur(&self) -> Wrapping<u8> {
-        self.cells[self.pointer.0]
+        self.cells[self.cell_pointer.0]
     }
     pub fn get_mut_cur(&mut self) -> &mut Wrapping<u8> {
-        &mut self.cells[self.pointer.0]
+        &mut self.cells[self.cell_pointer.0]
     }
     pub fn pointer_add(&mut self) {
-        self.pointer += Wrapping(1);
-        self.pointer %= Wrapping(self.cells.len());
+        self.cell_pointer += Wrapping(1);
+        self.cell_pointer %= Wrapping(self.cells.len());
     }
     pub fn pointer_sub(&mut self) {
-        self.pointer -= Wrapping(1);
-        self.pointer %= Wrapping(self.cells.len());
+        self.cell_pointer -= Wrapping(1);
+        self.cell_pointer %= Wrapping(self.cells.len());
     }
     pub fn get_stop_sender(&self) -> Sender<()> {
         self.channel.0.clone()
+    }
+    pub fn evaluate(self) -> Result<Cells> {
+        let State{loop_nesting, cells, ..} = self; 
+        if loop_nesting == 0 {
+            Ok(cells)
+        } else {
+            Err(Error::UnendedLoop)
+        }
     }
 }
 
@@ -143,30 +154,30 @@ fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOu
             1 => {
                 state.loop_nesting = 0;
 
-                let cmds = replace(&mut state.temp, Vec::new());
+                let cmds = replace(&mut state.ongoing_loops, Vec::new());
                 let mut cur = state.get_cur();
                 while cur != Wrapping(0) {
                     if let Ok(()) = state.channel.1.try_recv() {
                         return Err(Error::Stopped);
                     }
-                    for cmd in &cmds {
-                        run_command(state, cmd.clone(), io)?;
+                    for &cmd in &cmds {
+                        run_command(state, cmd, io)?;
                     }
                     cur = state.get_cur();
                 }
             }
             _ => {
                 state.loop_nesting -= 1;
-                state.temp.push(LoopEnd);
+                state.ongoing_loops.push(LoopEnd);
             }
         }
         LoopBegin => {
             state.loop_nesting += 1;
             if state.loop_nesting > 1 {
-                state.temp.push(LoopBegin);
+                state.ongoing_loops.push(LoopBegin);
             }
         }
-        ref cmd if state.loop_nesting > 0 => state.temp.push(cmd.clone()),
+        cmd if state.loop_nesting > 0 => state.ongoing_loops.push(cmd),
         PtrIncr => state.pointer_add(),
         PtrDecr => state.pointer_sub(),
         Incr => *state.get_mut_cur() += Wrapping(1),

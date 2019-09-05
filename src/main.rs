@@ -64,9 +64,10 @@ fn run() -> Result<()> {
             }
             run_with_state(s.as_bytes(), &mut state, &mut stdouter)?;
 
-            let cells_iter = state.cells();
+            let mut cells_iter = state.cells();
+            cells_iter.trim_end();
 
-            let n = (cells_iter.len() - cells_iter.rev().take_while(|&x| x == 0).count()).max(state.cell_pointer+1);
+            let n = (cells_iter.len()).max(state.cell_pointer+1);
 
             if state.cell_pointer == 0 {
                 print!("[")

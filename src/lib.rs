@@ -187,6 +187,15 @@ pub struct CellsIter<'a> {
     size: usize, 
 }
 
+impl CellsIter<'_> {
+    pub fn trim_end(&mut self) {
+        while let Some(Wrapping(0)) = self.inner.as_slice().last() {
+            self.inner.next_back();
+        }
+        self.size = self.inner.len();
+    }
+}
+
 impl Iterator for CellsIter<'_> {
     type Item = u8;
     fn next(&mut self) -> Option<Self::Item> {
@@ -225,6 +234,15 @@ impl ExactSizeIterator for CellsIter<'_> {
 pub struct CellsIntoIter {
     inner: std::vec::IntoIter<Wrapping<u8>>,
     size: usize, 
+}
+
+impl CellsIntoIter {
+    pub fn trim_end(&mut self) {
+        while let Some(Wrapping(0)) = self.inner.as_slice().last() {
+            self.inner.next_back();
+        }
+        self.size = self.inner.len();
+    }
 }
 
 impl Iterator for CellsIntoIter {

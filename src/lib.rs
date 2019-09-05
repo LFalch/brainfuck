@@ -4,7 +4,7 @@ use std::{
     sync::mpsc::{channel, Sender, Receiver},
     default::Default,
     io::{BufReader, Read, Write},
-    num::Wrapping,
+    num::{Wrapping, NonZeroUsize},
 };
 
 mod err;
@@ -57,21 +57,49 @@ impl Command {
     }
 }
 
-pub type Cells = [Wrapping<u8>; 256];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CellsLimit {
+    /// The bool signifies whether to wrap or not
+    limit: Option<(NonZeroUsize, bool)>,
+}
+
+impl CellsLimit {
+    pub fn new(limit: Option<(NonZeroUsize, bool)>) -> Self {
+        Self {
+            limit
+        }
+    }
+    pub fn limit(self) -> Option<usize> {
+        self.limit.map(|(n, _)| n.get())
+    }
+    pub fn wraps(self) -> bool {
+        self.limit.map(|(_, b)| b).unwrap_or(false)
+    }
+    #[inline]
+    fn get_limit_if_wrap(self) -> Option<usize> {
+        match self.limit {
+            Some((n, true)) => Some(n.get()),
+            _ => None,
+        }
+    }
+}
 
 pub struct State {
-    pub cells: Cells,
-    pub cell_pointer: Wrapping<usize>,
+    cells: Vec<Wrapping<u8>>,
+    cells_limit: CellsLimit,
+    pub cell_pointer: usize,
     pub ongoing_loops: Vec<Command>,
     pub loop_nesting: u16,
     pub channel: (Sender<()>, Receiver<()>),
 }
 
 impl Default for State {
+    #[inline]
     fn default() -> Self {
         State {
-            cells: [Wrapping(0); 256],
-            cell_pointer: Wrapping(0),
+            cells: vec![Wrapping(0)],
+            cells_limit: CellsLimit::default(),
+            cell_pointer: 0,
             ongoing_loops: Vec::new(),
             loop_nesting: 0,
             channel: channel(),
@@ -80,30 +108,157 @@ impl Default for State {
 }
 
 impl State {
+    #[inline]
+    pub fn new(cells_limit: CellsLimit) -> Self {
+        State{
+            cells_limit,
+            .. Self::default()
+        }
+    }
     pub fn get_cur(&self) -> Wrapping<u8> {
-        self.cells[self.cell_pointer.0]
+        self.cells.get(self.cell_pointer).copied().unwrap_or_default()
     }
     pub fn get_mut_cur(&mut self) -> &mut Wrapping<u8> {
-        &mut self.cells[self.cell_pointer.0]
+        // Make sure the cells has allocated enough space
+        if self.cells.len() <= self.cell_pointer {
+            self.cells.resize(self.cell_pointer + 1, Wrapping(0));
+        }
+        // This is safe since we're checking above and making sure the `Vec` is big enough
+        unsafe { self.cells.get_unchecked_mut(self.cell_pointer) }
     }
-    pub fn pointer_add(&mut self) {
-        self.cell_pointer += Wrapping(1);
-        self.cell_pointer %= Wrapping(self.cells.len());
+    pub fn pointer_add(&mut self) -> Result<()> {
+        let (cp, overflow) = self.cell_pointer.overflowing_add(1);
+
+        match self.cells_limit.limit {
+            Some((lim, true)) => self.cell_pointer = cp % lim.get(),
+            _ if overflow => return Err(Error::CellPointerOverflow),
+            None => self.cell_pointer = cp,
+            Some((lim, false)) => if cp >= lim.get() {
+                return Err(Error::CellPointerOverflow)
+            } else {
+                self.cell_pointer = cp;
+            }
+        }
+
+        Ok(())
     }
-    pub fn pointer_sub(&mut self) {
-        self.cell_pointer -= Wrapping(1);
-        self.cell_pointer %= Wrapping(self.cells.len());
+    pub fn pointer_sub(&mut self) -> Result<()> {
+        let (cp, overflow) = self.cell_pointer.overflowing_sub(1);
+
+        if overflow {
+            if let Some(limit) = self.cells_limit.get_limit_if_wrap() {
+                self.cell_pointer = limit - 1;
+            } else {
+                return Err(Error::CellPointerOverflow);
+            }
+        } else {
+            self.cell_pointer = cp;
+        }
+
+        Ok(())
     }
     pub fn get_stop_sender(&self) -> Sender<()> {
         self.channel.0.clone()
     }
-    pub fn evaluate(self) -> Result<Cells> {
-        let State{loop_nesting, cells, ..} = self; 
+    pub fn cells_limit(&self) -> &CellsLimit {
+        &self.cells_limit
+    }
+    pub fn cells(&self) -> CellsIter {
+        CellsIter {
+            size: self.cells_limit.limit().unwrap_or_else(|| self.cells.len()),
+            inner: self.cells.iter(),
+        }
+    }
+    pub fn evaluate(self) -> Result<CellsIntoIter> {
+        let State{loop_nesting, cells, cells_limit, ..} = self; 
         if loop_nesting == 0 {
-            Ok(cells)
+            Ok(CellsIntoIter {
+                size: cells_limit.limit().unwrap_or_else(|| cells.len()),
+                inner: cells.into_iter(),
+            })
         } else {
             Err(Error::UnendedLoop)
         }
+    }
+}
+
+pub struct CellsIter<'a> {
+    inner: std::slice::Iter<'a, Wrapping<u8>>,
+    size: usize, 
+}
+
+impl Iterator for CellsIter<'_> {
+    type Item = u8;
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = self.inner.next().map(|w| w.0);
+
+        if self.size > 0 {
+            self.size -= 1;
+            if ret.is_none() {
+                return Some(0);
+            }
+        }
+
+        ret
+    }
+}
+
+impl DoubleEndedIterator for CellsIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.size > self.inner.len() {
+            self.size -= 1;
+            Some(0)
+        } else {
+            self.size = self.size.saturating_sub(1);
+
+            self.inner.next_back().map(|w| w.0)
+        }
+    }
+}
+
+impl ExactSizeIterator for CellsIter<'_> {
+    fn len(&self) -> usize {
+        self.size
+    }
+}
+
+pub struct CellsIntoIter {
+    inner: std::vec::IntoIter<Wrapping<u8>>,
+    size: usize, 
+}
+
+impl Iterator for CellsIntoIter {
+    type Item = u8;
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = self.inner.next().map(|w| w.0);
+
+        if self.size > 0 {
+            self.size -= 1;
+            if ret.is_none() {
+                return Some(0);
+            }
+        }
+
+        ret
+    }
+}
+
+impl DoubleEndedIterator for CellsIntoIter {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.size > self.inner.len() {
+            self.size -= 1;
+            Some(0)
+        } else {
+            self.size = self.size.saturating_sub(1);
+
+            self.inner.next_back().map(|w| w.0)
+        }
+    }
+}
+
+impl ExactSizeIterator for CellsIntoIter {
+    fn len(&self) -> usize {
+        self.size
     }
 }
 
@@ -178,8 +333,8 @@ fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOu
             }
         }
         cmd if state.loop_nesting > 0 => state.ongoing_loops.push(cmd),
-        PtrIncr => state.pointer_add(),
-        PtrDecr => state.pointer_sub(),
+        PtrIncr => state.pointer_add()?,
+        PtrDecr => state.pointer_sub()?,
         Incr => *state.get_mut_cur() += Wrapping(1),
         Decr => *state.get_mut_cur() -= Wrapping(1),
         Out => io.o.write_all(&[state.get_cur().0])?,

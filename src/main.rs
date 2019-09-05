@@ -3,6 +3,7 @@
 use clap::{App, Arg};
 use std::fs::File;
 use std::io::{stdin, stdout, Write};
+use std::num::NonZeroUsize;
 
 use brainfuck::Error::*;
 use brainfuck::*;
@@ -17,10 +18,35 @@ fn run() -> Result<()> {
             Arg::with_name("interactive")
                 .short("i")
                 .long("interactive")
-                .help("Starts interactive shell"),
+                .help("Starts interactive shell")
+        )
+        .arg(
+            Arg::with_name("limit")
+                .short("s")
+                .long("size")
+                .value_name("SIZE")
+                .takes_value(true)
+                .validator(|s| s.parse::<NonZeroUsize>().map(|_| ()).map_err(|_| "Has to be a number greater than zero".to_owned()))
+                .help("The amount of cells that the program can use")
+        )
+        .arg(
+            Arg::with_name("wrap")
+                .short("w")
+                .long("wrap")
+                .help("Whether the cell pointer should wrap around the cell size")
+                .requires("limit")
         )
         .get_matches();
-    let mut state = State::default();
+
+    let limit = CellsLimit::new(if let Some(limit) = matches.value_of("limit") {
+        let wrap = matches.is_present("wrap");
+
+        Some((limit.parse::<NonZeroUsize>().unwrap(), wrap))
+    } else {
+        None
+    });
+
+    let mut state = State::new(limit);
     let mut stdouter = InOuter::new(stdout(), stdin());
 
     if matches.is_present("interactive") {
@@ -38,16 +64,18 @@ fn run() -> Result<()> {
             }
             run_with_state(s.as_bytes(), &mut state, &mut stdouter)?;
 
-            let n = (state.cells.len() - state.cells.iter().rev().take_while(|x| x.0 == 0).count()).max(state.cell_pointer.0+1);
+            let cells_iter = state.cells();
 
-            if state.cell_pointer.0 == 0 {
+            let n = (cells_iter.len() - cells_iter.rev().take_while(|&x| x == 0).count()).max(state.cell_pointer+1);
+
+            if state.cell_pointer == 0 {
                 print!("[")
             }
-            for (i, byte) in state.cells.iter().take(n).map(|w| w.0).enumerate() {
+            for (i, byte) in state.cells().chain(std::iter::repeat(0)).take(n).enumerate() {
                 print!("{:02x}", byte);
-                if i == state.cell_pointer.0 {
+                if i == state.cell_pointer {
                     print!("]");
-                } else if i+1 == state.cell_pointer.0 {
+                } else if i+1 == state.cell_pointer {
                     print!("[");
                 } else {
                     print!(" ");
@@ -72,5 +100,6 @@ fn main() {
         Err(OutOfBounds) => eprintln!("Error, out of bounds"),
         Err(NoLoopStarted) => eprintln!("Error, cannot end a loop when none has been started"),
         Err(UnendedLoop) => eprintln!("Error, ended with unended loops"),
+        Err(CellPointerOverflow) => eprintln!("Error, cell pointer overflowed limit"),
     }
 }

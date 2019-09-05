@@ -10,6 +10,7 @@ pub enum Error {
     OutOfBounds,
     NoLoopStarted,
     UnendedLoop,
+    CellPointerOverflow,
     IoError(IoError),
 }
 

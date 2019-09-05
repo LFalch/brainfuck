@@ -237,6 +237,13 @@ pub struct CellsIntoIter {
 }
 
 impl CellsIntoIter {
+    #[inline]
+    pub fn as_ref(&self) -> CellsIter<'_> {
+        CellsIter {
+            inner: self.inner.as_slice().iter(),
+            size: self.size
+        }
+    }
     pub fn trim_end(&mut self) {
         while let Some(Wrapping(0)) = self.inner.as_slice().last() {
             self.inner.next_back();

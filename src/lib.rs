@@ -195,6 +195,7 @@ impl Stopper {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CellsIter<'a> {
     inner: std::slice::Iter<'a, Wrapping<u8>>,
     size: usize, 
@@ -244,6 +245,7 @@ impl ExactSizeIterator for CellsIter<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CellsIntoIter {
     inner: std::vec::IntoIter<Wrapping<u8>>,
     size: usize, 

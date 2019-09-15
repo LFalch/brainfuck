@@ -1,7 +1,7 @@
 #![warn(clippy::all)]
 
 use std::{
-    sync::mpsc::{channel, Sender, Receiver},
+    sync::mpsc::{sync_channel, SyncSender, Receiver},
     default::Default,
     io::{BufReader, Read, Write},
     num::{Wrapping, NonZeroUsize},
@@ -90,7 +90,7 @@ pub struct State {
     pub cell_pointer: usize,
     pub ongoing_loops: Vec<Command>,
     pub loop_nesting: u16,
-    pub channel: (Sender<()>, Receiver<()>),
+    pub channel: (SyncSender<()>, Receiver<()>),
 }
 
 impl Default for State {
@@ -102,7 +102,7 @@ impl Default for State {
             cell_pointer: 0,
             ongoing_loops: Vec::new(),
             loop_nesting: 0,
-            channel: channel(),
+            channel: sync_channel(0),
         }
     }
 }
@@ -157,7 +157,7 @@ impl State {
 
         Ok(())
     }
-    pub fn get_stop_sender(&self) -> Sender<()> {
+    pub fn get_stop_sender(&self) -> SyncSender<()> {
         self.channel.0.clone()
     }
     pub fn cells_limit(&self) -> &CellsLimit {

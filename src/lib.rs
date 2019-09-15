@@ -1,7 +1,7 @@
 #![warn(clippy::all)]
 
 use std::{
-    sync::mpsc::{sync_channel, SyncSender, Receiver},
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
     default::Default,
     io::{BufReader, Read, Write},
     num::{Wrapping, NonZeroUsize},
@@ -90,7 +90,7 @@ pub struct State {
     pub cell_pointer: usize,
     pub ongoing_loops: Vec<Command>,
     pub loop_nesting: u16,
-    pub channel: (SyncSender<()>, Receiver<()>),
+    running: Arc<AtomicBool>,
 }
 
 impl Default for State {
@@ -102,7 +102,7 @@ impl Default for State {
             cell_pointer: 0,
             ongoing_loops: Vec::new(),
             loop_nesting: 0,
-            channel: sync_channel(0),
+            running: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -157,8 +157,11 @@ impl State {
 
         Ok(())
     }
-    pub fn get_stop_sender(&self) -> SyncSender<()> {
-        self.channel.0.clone()
+    #[inline]
+    pub fn get_stop_sender(&self) -> Stopper {
+        Stopper {
+            inner: self.running.clone()
+        }
     }
     pub fn cells_limit(&self) -> &CellsLimit {
         &self.cells_limit
@@ -179,6 +182,16 @@ impl State {
         } else {
             Err(Error::UnendedLoop)
         }
+    }
+}
+
+pub struct Stopper {
+    inner: Arc<AtomicBool>,
+}
+
+impl Stopper {
+    pub fn stop(self) {
+        self.inner.store(false, Ordering::SeqCst);
     }
 }
 
@@ -308,8 +321,9 @@ where
     R2: Read,
     W: Write,
 {
+    state.running.store(true, Ordering::SeqCst);
     for cmd in src.bytes().map(|b| b.map(Command::from_byte)) {
-        if let Ok(()) = state.channel.1.try_recv() {
+        if !state.running.load(Ordering::SeqCst) {
             return Err(Error::Stopped);
         }
         match cmd {
@@ -337,7 +351,7 @@ fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOu
                 let cmds = replace(&mut state.ongoing_loops, Vec::new());
                 let mut cur = state.get_cur();
                 while cur != Wrapping(0) {
-                    if let Ok(()) = state.channel.1.try_recv() {
+                    if !state.running.load(Ordering::SeqCst) {
                         return Err(Error::Stopped);
                     }
                     for &cmd in &cmds {

@@ -1,5 +1,4 @@
-use std::io::Error as IoError;
-use std::result::Result as StdResult;
+use std::{io::Error as IoError, result::Result as StdResult};
 
 pub type Result<T> = StdResult<T, Error>;
 

@@ -1,11 +1,17 @@
 #![warn(clippy::all)]
 
 use std::{
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
     default::Default,
+    fmt::{self, Debug},
     io::{BufReader, Read, Write},
-    num::{Wrapping, NonZeroUsize},
+    num::{NonZeroUsize, Wrapping},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
+
+use self::Command::*;
 
 mod err;
 pub use crate::err::{Error, Result};
@@ -25,21 +31,22 @@ pub enum Command {
 
 impl Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            Incr => "+",
-            Decr => "-",
-            PtrIncr => ">",
-            PtrDecr => "<",
-            Out => ".",
-            In => ",",
-            LoopBegin => "[",
-            LoopEnd => "]",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                Incr => "+",
+                Decr => "-",
+                PtrIncr => ">",
+                PtrDecr => "<",
+                Out => ".",
+                In => ",",
+                LoopBegin => "[",
+                LoopEnd => "]",
+            }
+        )
     }
 }
-
-use std::fmt::{self, Debug};
-use self::Command::*;
 
 impl Command {
     pub fn from_byte(cmd: u8) -> Option<Self> {
@@ -52,7 +59,7 @@ impl Command {
             b',' => In,
             b'[' => LoopBegin,
             b']' => LoopEnd,
-            _ => return None
+            _ => return None,
         })
     }
 }
@@ -65,15 +72,13 @@ pub struct CellsLimit {
 
 impl CellsLimit {
     pub fn new(limit: Option<(NonZeroUsize, bool)>) -> Self {
-        Self {
-            limit
-        }
+        Self { limit }
     }
     pub fn limit(self) -> Option<usize> {
         self.limit.map(|(n, _)| n.get())
     }
     pub fn wraps(self) -> bool {
-        self.limit.map(|(_, b)| b).unwrap_or(false)
+        self.limit.map_or(false, |(_, b)| b)
     }
     #[inline]
     fn get_limit_if_wrap(self) -> Option<usize> {
@@ -110,13 +115,16 @@ impl Default for State {
 impl State {
     #[inline]
     pub fn new(cells_limit: CellsLimit) -> Self {
-        State{
+        State {
             cells_limit,
-            .. Self::default()
+            ..Self::default()
         }
     }
     pub fn get_cur(&self) -> Wrapping<u8> {
-        self.cells.get(self.cell_pointer).copied().unwrap_or_default()
+        self.cells
+            .get(self.cell_pointer)
+            .copied()
+            .unwrap_or_default()
     }
     pub fn get_mut_cur(&mut self) -> &mut Wrapping<u8> {
         // Make sure the cells has allocated enough space
@@ -133,9 +141,11 @@ impl State {
             Some((lim, true)) => self.cell_pointer = cp % lim.get(),
             _ if overflow => return Err(Error::CellPointerOverflow),
             None => self.cell_pointer = cp,
-            Some((lim, false)) => if cp >= lim.get() {
-                return Err(Error::CellPointerOverflow)
-            } else {
+            Some((lim, false)) => {
+                if cp >= lim.get() {
+                    return Err(Error::CellPointerOverflow);
+                }
+
                 self.cell_pointer = cp;
             }
         }
@@ -158,25 +168,32 @@ impl State {
         Ok(())
     }
     #[inline]
+    #[must_use]
     pub fn get_stop_sender(&self) -> Stopper {
         Stopper {
-            inner: self.running.clone()
+            inner: self.running.clone(),
         }
     }
     pub fn cells_limit(&self) -> &CellsLimit {
         &self.cells_limit
     }
+    #[must_use]
     pub fn cells(&self) -> CellsIter {
         CellsIter {
-            size: self.cells_limit.limit().unwrap_or_else(|| self.cells.len()),
+            size: self.cells_limit.limit().unwrap_or(self.cells.len()),
             inner: self.cells.iter(),
         }
     }
     pub fn evaluate(self) -> Result<CellsIntoIter> {
-        let State{loop_nesting, cells, cells_limit, ..} = self; 
+        let State {
+            loop_nesting,
+            cells,
+            cells_limit,
+            ..
+        } = self;
         if loop_nesting == 0 {
             Ok(CellsIntoIter {
-                size: cells_limit.limit().unwrap_or_else(|| cells.len()),
+                size: cells_limit.limit().unwrap_or(cells.len()),
                 inner: cells.into_iter(),
             })
         } else {
@@ -196,9 +213,10 @@ impl Stopper {
 }
 
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct CellsIter<'a> {
     inner: std::slice::Iter<'a, Wrapping<u8>>,
-    size: usize, 
+    size: usize,
 }
 
 impl CellsIter<'_> {
@@ -246,9 +264,10 @@ impl ExactSizeIterator for CellsIter<'_> {
 }
 
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct CellsIntoIter {
     inner: std::vec::IntoIter<Wrapping<u8>>,
-    size: usize, 
+    size: usize,
 }
 
 impl CellsIntoIter {
@@ -256,7 +275,7 @@ impl CellsIntoIter {
     pub fn as_ref(&self) -> CellsIter<'_> {
         CellsIter {
             inner: self.inner.as_slice().iter(),
-            size: self.size
+            size: self.size,
         }
     }
     pub fn trim_end(&mut self) {
@@ -309,7 +328,10 @@ pub struct InOuter<W: Write, R: Read> {
 
 impl<W: Write, R: Read> InOuter<W, R> {
     pub fn new(o: W, i: R) -> Self {
-        InOuter { o, i: BufReader::new(i) }
+        InOuter {
+            o,
+            i: BufReader::new(i),
+        }
     }
     pub fn extract(self) -> (W, R) {
         let InOuter { i, o } = self;
@@ -341,16 +363,20 @@ where
     Ok(())
 }
 
-use std::mem::replace;
+use std::mem::take;
 
-fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOuter<W, R>) -> Result<()> {
+fn run_command<W: Write, R: Read>(
+    state: &mut State,
+    cmd: Command,
+    io: &mut InOuter<W, R>,
+) -> Result<()> {
     match cmd {
         LoopEnd => match state.loop_nesting {
             0 => return Err(Error::NoLoopStarted),
             1 => {
                 state.loop_nesting = 0;
 
-                let cmds = replace(&mut state.ongoing_loops, Vec::new());
+                let cmds = take(&mut state.ongoing_loops);
                 let mut cur = state.get_cur();
                 while cur != Wrapping(0) {
                     if !state.running.load(Ordering::SeqCst) {
@@ -366,7 +392,7 @@ fn run_command<W: Write, R: Read>(state: &mut State, cmd: Command, io: &mut InOu
                 state.loop_nesting -= 1;
                 state.ongoing_loops.push(LoopEnd);
             }
-        }
+        },
         LoopBegin => {
             state.loop_nesting += 1;
             if state.loop_nesting > 1 {

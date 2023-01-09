@@ -1,7 +1,6 @@
 use std::io::Error as IoError;
 use std::result::Result as StdResult;
 
-#[must_use]
 pub type Result<T> = StdResult<T, Error>;
 
 #[derive(Debug)]

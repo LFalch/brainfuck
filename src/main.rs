@@ -1,55 +1,42 @@
 #![warn(clippy::all)]
 
-use clap::{App, Arg};
+use clap::Parser;
 use std::fs::File;
-use std::io::{stdin, stdout, Write};
+use std::io::{stdin, stdout, Write, BufReader};
 use std::num::NonZeroUsize;
+use std::process::ExitCode;
 
 use brainfuck::Error::*;
 use brainfuck::*;
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Source code to run
+    #[arg(required_unless_present = "interactive")]
+    source: Option<String>,
+
+    /// Starts interactive shell
+    #[arg(short, long)]
+    interactive: bool,
+
+    /// The amount of cells that the program can use
+    #[arg(short = 's', long = "size", value_name = "SIZE",)]
+    limit: Option<NonZeroUsize>,
+    /// Whether the cell pointer should wrap around the cell size
+    #[arg(short, long, requires = "limit")]
+    wrap: bool,
+}
+
 fn run() -> Result<()> {
-    let matches = App::new(env!("CARGO_PKG_NAME"))
-        .version(env!("CARGO_PKG_VERSION"))
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .about(env!("CARGO_PKG_DESCRIPTION"))
-        .arg(Arg::with_name("SOURCE").help("Source code to run").required_unless("interactive"))
-        .arg(
-            Arg::with_name("interactive")
-                .short("i")
-                .long("interactive")
-                .help("Starts interactive shell")
-        )
-        .arg(
-            Arg::with_name("limit")
-                .short("s")
-                .long("size")
-                .value_name("SIZE")
-                .takes_value(true)
-                .validator(|s| s.parse::<NonZeroUsize>().map(|_| ()).map_err(|_| "Has to be a number greater than zero".to_owned()))
-                .help("The amount of cells that the program can use")
-        )
-        .arg(
-            Arg::with_name("wrap")
-                .short("w")
-                .long("wrap")
-                .help("Whether the cell pointer should wrap around the cell size")
-                .requires("limit")
-        )
-        .get_matches();
+    let cli = Cli::parse();
 
-    let limit = CellsLimit::new(if let Some(limit) = matches.value_of("limit") {
-        let wrap = matches.is_present("wrap");
-
-        Some((limit.parse::<NonZeroUsize>().unwrap(), wrap))
-    } else {
-        None
-    });
+    let limit = CellsLimit::new(cli.limit.map(|limit| (limit, cli.wrap)));
 
     let mut state = State::new(limit);
     let mut stdouter = InOuter::new(stdout(), stdin());
 
-    if matches.is_present("interactive") {
+    if cli.interactive {
         println!("Brainfuck Interactive Shell");
         println!("Type $exit to exit");
         loop {
@@ -85,22 +72,24 @@ fn run() -> Result<()> {
             println!();
         }
     } else {
-        let src = matches.value_of("SOURCE").unwrap();
+        let src = cli.source.unwrap();
 
-        let file = File::open(src).unwrap();
+        let file = BufReader::new(File::open(src).unwrap());
         run_with_state(file, &mut state, &mut stdouter)?;
     }
     state.evaluate().map(std::mem::drop)
 }
 
-fn main() {
+fn main() -> ExitCode {
     match run() {
-        Ok(()) => (), 
-        Err(IoError(e)) => panic!("Unexpected error:\n{:?}", e),
+        Ok(()) => return ExitCode::SUCCESS,
+        Err(IoError(e)) => eprintln!("Unexpected error:\n{:?}", e),
         Err(Stopped) => (),
         Err(OutOfBounds) => eprintln!("Error, out of bounds"),
         Err(NoLoopStarted) => eprintln!("Error, cannot end a loop when none has been started"),
         Err(UnendedLoop) => eprintln!("Error, ended with unended loops"),
         Err(CellPointerOverflow) => eprintln!("Error, cell pointer overflowed limit"),
     }
+
+    ExitCode::FAILURE
 }

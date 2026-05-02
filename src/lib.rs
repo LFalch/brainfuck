@@ -78,7 +78,7 @@ impl CellsLimit {
         self.limit.map(|(n, _)| n.get())
     }
     pub fn wraps(self) -> bool {
-        self.limit.map_or(false, |(_, b)| b)
+        self.limit.is_some_and(|(_, b)| b)
     }
     #[inline]
     fn get_limit_if_wrap(self) -> Option<usize> {
@@ -177,7 +177,7 @@ impl State {
     pub fn cells_limit(&self) -> &CellsLimit {
         &self.cells_limit
     }
-    #[must_use]
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
     pub fn cells(&self) -> CellsIter<'_> {
         CellsIter {
             size: self.cells_limit.limit().unwrap_or(self.cells.len()),
@@ -346,16 +346,12 @@ where
     W: Write,
 {
     state.running.store(true, Ordering::SeqCst);
-    for cmd in src.bytes().map(|b| b.map(Command::from_byte)) {
+    for cmd in src.bytes().filter_map(|b| b.map(Command::from_byte).transpose()) {
         if !state.running.load(Ordering::SeqCst) {
             return Err(Error::Stopped);
         }
         match cmd {
-            Ok(cmd) => {
-                if let Some(cmd) = cmd {
-                    run_command(state, cmd, io)?;
-                }
-            }
+            Ok(cmd) => run_command(state, cmd, io)?,
             Err(e) => return Err(Error::IoError(e)),
         }
     }

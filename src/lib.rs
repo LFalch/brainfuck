@@ -178,7 +178,7 @@ impl State {
         &self.cells_limit
     }
     #[must_use]
-    pub fn cells(&self) -> CellsIter {
+    pub fn cells(&self) -> CellsIter<'_> {
         CellsIter {
             size: self.cells_limit.limit().unwrap_or(self.cells.len()),
             inner: self.cells.iter(),

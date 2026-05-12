@@ -19,6 +19,10 @@ struct Cli {
     #[arg(short, long)]
     interactive: bool,
 
+    /// Dumps cell state after running to STDERR (file descriptor 2)
+    #[arg(short, long, conflicts_with("interactive"))]
+    dump: bool,
+
     /// The amount of cells that the program can use
     #[arg(short = 's', long = "size", value_name = "SIZE")]
     limit: Option<NonZeroUsize>,
@@ -81,7 +85,25 @@ fn run() -> Result<()> {
         let file = BufReader::new(File::open(src).unwrap());
         run_with_state(file, &mut state, &mut stdouter)?;
     }
-    state.evaluate().map(std::mem::drop)
+    let cp = state.cell_pointer;
+    let cells = state.evaluate()?;
+    if cli.dump {
+        let mut space_before = false;
+        for (i, cell) in cells.enumerate() {
+            if i == cp {
+                eprint!("[{cell:02x}]");
+                space_before = false;
+            } else {
+                if space_before {
+                    eprint!(" ");
+                }
+                space_before = true;
+                eprint!("{cell:02x}");
+            }
+        }
+        eprintln!();
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
